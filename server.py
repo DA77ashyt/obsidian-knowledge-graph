@@ -13,10 +13,11 @@ from pathlib import Path
 
 import frontmatter
 import httpx
+import subprocess
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
@@ -340,6 +341,94 @@ async def api_file_content(path: str = Query(..., description="Relative path wit
             "frontmatter": fm, "title": fm.get("title", Path(path).stem)}
 
 
+@app.get("/api/file/download")
+async def api_file_download(path: str = Query(..., description="Relative path within vault")):
+    """Download a markdown file as an attachment."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    fp = (VAULT_PATH / path).resolve()
+    try:
+        fp.relative_to(VAULT_PATH.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(fp), media_type="text/markdown",
+                        filename=fp.name,
+                        headers={"Content-Disposition": f'attachment; filename="{fp.name}"'})
+
+
+@app.post("/api/file/upload")
+async def api_file_upload(
+    file: UploadFile = File(...),
+    subdir: str = Form(""),
+    overwrite: bool = Form(False)
+):
+    """Upload a markdown file to the vault."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    if not file.filename or not file.filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md files are allowed")
+    safe_name = Path(file.filename).name
+    dest_dir = VAULT_PATH
+    if subdir:
+        dest_dir = (VAULT_PATH / subdir).resolve()
+        try:
+            dest_dir.relative_to(VAULT_PATH.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied: subdir outside vault")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / safe_name
+    if dest.exists() and not overwrite:
+        raise HTTPException(status_code=409, detail=f"File '{safe_name}' already exists. Set overwrite=true to replace.")
+    content = await file.read()
+    max_size = 5 * 1024 * 1024  # 5MB
+    if len(content) > max_size:
+        raise HTTPException(status_code=413, detail="File too large (>5MB)")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(text)
+    invalidate_cache()
+    logger.info("Uploaded: %s -> %s (subdir=%s)", file.filename, dest.relative_to(VAULT_PATH), subdir or "root")
+    return {"success": True, "path": str(dest.relative_to(VAULT_PATH)).replace("\\", "/"),
+            "name": safe_name, "size": len(text)}
+
+
+@app.get("/api/file/list")
+async def api_file_list(subdir: str = Query("", description="Relative subdirectory in vault")):
+    """List markdown files in the vault (optionally scoped to a subdir)."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    base = VAULT_PATH
+    if subdir:
+        base = (VAULT_PATH / subdir).resolve()
+        try:
+            base.relative_to(VAULT_PATH.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied")
+    result = []
+    for md_file in sorted(base.rglob("*.md")):
+        parts = md_file.relative_to(VAULT_PATH).parts
+        if any(p.startswith(".") for p in parts):
+            continue
+        if ".agents" in parts:
+            continue
+        try:
+            stat = md_file.stat()
+            result.append({
+                "path": str(md_file.relative_to(VAULT_PATH)).replace("\\", "/"),
+                "name": md_file.name,
+                "size": stat.st_size,
+                "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+        except OSError:
+            continue
+    return {"success": True, "files": result, "total": len(result)}
+
+
 @app.get("/api/search")
 async def api_search(q: str = Query(""), tags: str = Query("")):
     data = get_cached_scan()
@@ -577,6 +666,153 @@ async def api_ask(req: AskRequest):
     except Exception as e:
         logger.exception("Q&A failed")
         raise HTTPException(status_code=500, detail="Q&A failed")
+
+
+# ======================== Git Branch Management ========================
+
+def _run_git(args: list[str]) -> str:
+    """Run a git command inside VAULT_PATH and return stdout, or raise on error."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    try:
+        result = subprocess.run(
+            ["git"] + args,
+            cwd=str(VAULT_PATH),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or "git command failed"
+            raise HTTPException(status_code=500, detail=err)
+        return result.stdout
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Git is not installed or not found in PATH")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Git command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _check_git_repo():
+    """Raise if the vault is not a git repository."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    dot_git = VAULT_PATH / ".git"
+    if not dot_git.exists():
+        raise HTTPException(status_code=400, detail="Vault is not a git repository. Run 'git init' in your vault first.")
+
+
+@app.get("/api/git/branches")
+async def api_git_branches():
+    """List all branches (local)."""
+    _check_git_repo()
+    output = _run_git(["branch", "--format=%(refname:short)|%(objectname:short)|%(upstream:short)|%(HEAD)"])
+    branches = []
+    for line in output.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("|")
+        name = parts[0] if len(parts) > 0 else ""
+        commit = parts[1] if len(parts) > 1 else ""
+        upstream = parts[2] if len(parts) > 2 else ""
+        is_head = parts[3] if len(parts) > 3 else ""
+        branches.append({
+            "name": name, "commit": commit,
+            "upstream": upstream if upstream else None,
+            "current": is_head == "*",
+        })
+    return {"success": True, "branches": branches}
+
+
+@app.get("/api/git/current-branch")
+async def api_git_current_branch():
+    """Get the current branch name."""
+    _check_git_repo()
+    output = _run_git(["branch", "--show-current"]).strip()
+    return {"success": True, "branch": output}
+
+
+class BranchRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/git/branch/create")
+async def api_git_branch_create(req: BranchRequest):
+    """Create a new branch from the current HEAD."""
+    _check_git_repo()
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
+    if not re.match(r'^[a-zA-Z0-9._/-]+$', name):
+        raise HTTPException(status_code=400, detail="Invalid branch name. Use a-z, 0-9, ., _, /, - only.")
+    try:
+        _run_git(["checkout", "-b", name])
+    except HTTPException as e:
+        if "already exists" in str(e.detail):
+            # Try switching instead
+            try:
+                _run_git(["checkout", name])
+            except HTTPException as e2:
+                raise HTTPException(status_code=500, detail=f"Branch '{name}' already exists but cannot switch: {e2.detail}")
+        else:
+            raise
+    logger.info("Created/switched to branch: %s", name)
+    return {"success": True, "branch": name}
+
+
+@app.post("/api/git/branch/switch")
+async def api_git_branch_switch(req: BranchRequest):
+    """Switch to an existing branch."""
+    _check_git_repo()
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
+    _run_git(["checkout", name])
+    logger.info("Switched to branch: %s", name)
+    return {"success": True, "branch": name}
+
+
+@app.post("/api/git/branch/delete")
+async def api_git_branch_delete(req: BranchRequest):
+    """Delete a local branch (refuses to delete the current branch)."""
+    _check_git_repo()
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Branch name cannot be empty")
+    current = _run_git(["branch", "--show-current"]).strip()
+    if name == current:
+        raise HTTPException(status_code=400, detail="Cannot delete the current branch. Switch to another branch first.")
+    _run_git(["branch", "-d", name])
+    logger.info("Deleted branch: %s", name)
+    return {"success": True, "branch": name}
+
+
+@app.get("/api/git/status")
+async def api_git_status():
+    """Get git status of the vault."""
+    _check_git_repo()
+    branch = _run_git(["branch", "--show-current"]).strip()
+    status_output = _run_git(["status", "--porcelain"])
+    files = []
+    for line in status_output.strip().split("\n"):
+        if not line:
+            continue
+        code = line[:2].strip()
+        fname = line[3:].strip().strip('"')
+        status_map = {
+            "M": "modified", "A": "added", "D": "deleted",
+            "R": "renamed", "C": "copied", "??": "untracked",
+        }
+        files.append({
+            "status": status_map.get(code, code or "unknown"),
+            "path": fname,
+        })
+    is_clean = len(files) == 0
+    return {"success": True, "branch": branch, "clean": is_clean, "files": files, "total": len(files)}
 
 
 # ======================== Startup & Static ========================
