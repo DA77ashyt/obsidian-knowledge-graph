@@ -106,7 +106,7 @@ body {
 #detail-panel .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 #detail-panel .tags span { font-size: 11px; padding: 3px 10px; border-radius: 12px; background: var(--bg-card); color: var(--accent); cursor: pointer; }
 #detail-panel .tags span:hover { opacity: .8; }
-.content-preview { font-size: 13px; line-height: 1.7; color: #ccc; max-height: 200px; overflow-y: auto; background: var(--bg); border-radius: 8px; padding: 12px; white-space: pre-wrap; }
+.content-preview { font-size: 13px; line-height: 1.7; color: #ccc; max-height: 400px; overflow-y: auto; background: var(--bg); border-radius: 8px; padding: 12px; }
 .related-node { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; cursor: pointer; transition: all .2s; }
 .related-node:hover { color: var(--highlight); }
 .related-node .rel-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -212,7 +212,7 @@ body {
 .zoom-btn:hover { background: var(--bg-card); border-color: var(--accent); }
 
 /* MD Manager */
-.md-manager-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; height: calc(100% - 80px); overflow: hidden; }
+.md-manager-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; min-height: 0; overflow: hidden; }
 .md-manager-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
 .md-manager-panel.full { grid-column: 1 / -1; }
 .md-manager-panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--accent); display: flex; justify-content: space-between; align-items: center; }
@@ -234,7 +234,7 @@ body {
 .md-upload-area .upload-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 
 .md-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; overflow-y: auto; }
-.md-preview-content { padding: 20px; font-size: 13px; line-height: 1.8; }
+.md-preview-content { padding: 20px; font-size: 13px; line-height: 1.8; flex: 1; overflow-y: auto; min-height: 0; }
 .md-preview-content h1, .md-preview-content h2, .md-preview-content h3 { color: var(--accent); margin: 16px 0 8px; }
 .md-preview-content h1 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .md-preview-content h2 { font-size: 16px; }
@@ -342,9 +342,9 @@ body {
           <p style="color:var(--text-dim);font-size:12px;">加载中...</p>
         </div>
       </div>
-      <!-- Right: Upload + Preview + Git -->
+      <!-- Right: Upload + File Ops -->
       <div class="md-manager-panel">
-        <div class="md-manager-panel-header">📤 上传 / 🌿 Git 分支</div>
+        <div class="md-manager-panel-header">📤 上传 / 📂 文件夹</div>
         <div class="md-manager-panel-body">
           <!-- Upload -->
           <div class="md-upload-area" id="md-upload-area" onclick="document.getElementById('md-upload-input').click()">
@@ -353,14 +353,14 @@ body {
             <div class="upload-hint">仅支持 UTF-8 编码的 Markdown 文件（≤5MB）</div>
           </div>
           <input type="file" id="md-upload-input" accept=".md" style="display:none" onchange="uploadMDFile(this.files[0])">
-          <!-- Git Branch Manager -->
-          <div class="md-manager-panel-header" style="margin:0 -16px;border-radius:0;">🌿 Git 分支</div>
-          <div id="md-git-branches" style="margin-top:8px;">
-            <p style="color:var(--text-dim);font-size:11px;">加载分支信息...</p>
+          <!-- Folder Manager -->
+          <div class="md-manager-panel-header" style="margin:0 -16px;border-radius:0;">📂 文件夹</div>
+          <div id="md-folder-list" style="margin-top:8px;max-height:180px;overflow-y:auto;">
+            <p style="color:var(--text-dim);font-size:11px;">加载文件夹...</p>
           </div>
           <div class="git-create-branch">
-            <input type="text" id="md-new-branch-input" placeholder="新分支名称...">
-            <button onclick="createBranch()">+ 创建</button>
+            <input type="text" id="md-new-folder-input" placeholder="新文件夹名称...">
+            <button onclick="createFolder()">+ 创建</button>
           </div>
         </div>
       </div>
@@ -938,7 +938,7 @@ async function showDetail(node) {
     if (preview) {
       var text = fileData.content || '';
       if (text.length > 800) text = text.slice(0, 800) + '\n\n> ...（展开完整内容请在 Obsidian 中打开）';
-      preview.innerHTML = marked.parse(text);
+      preview.innerHTML = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(text) : '<pre style="white-space:pre-wrap;font-size:12px;">' + escapeHtml(text) + '</pre>';
     }
   } catch(e) {
     var preview = document.getElementById('content-preview');
@@ -1238,7 +1238,7 @@ async function openMDManager() {
     return;
   }
   document.getElementById('md-manager-overlay').classList.add('show');
-  await Promise.all([loadMDFileList(), loadGitBranches()]);
+  await Promise.all([loadMDFileList(), loadFolders()]);
   // Drag & drop setup
   var uploadArea = document.getElementById('md-upload-area');
   uploadArea.addEventListener('dragover', function(e) {
@@ -1282,8 +1282,12 @@ async function loadMDFileList() {
           '<div class="file-meta">' + escapeHtml(f.path) + ' · ' + sizeKB + ' KB · ' + escapeHtml(f.mtime) + '</div>' +
         '</div>' +
         '<div class="file-actions">' +
-          '<button onclick="previewMD(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\', \'' + escapeHtml(f.name).replace(/'/g, "\\'") + '\')">👁️ 预览</button>' +
-          '<button onclick="downloadMD(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')">⬇</button>' +
+          '<button onclick="previewMD(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\', \'' + escapeHtml(f.name).replace(/'/g, "\\'") + '\')" title="预览">👁️</button>' +
+          '<button onclick="downloadMD(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" title="下载">⬇</button>' +
+          '<button onclick="renameFile(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" title="重命名">✏️</button>' +
+          '<button onclick="moveFileDialog(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" title="移动">📂</button>' +
+          '<button onclick="tagFileDialog(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" title="标签">🏷️</button>' +
+          '<button onclick="deleteFile(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" title="删除" style="color:var(--accent)">🗑</button>' +
         '</div>' +
       '</div>';
     });
@@ -1312,7 +1316,7 @@ async function previewMD(path, name) {
     var res = await fetch('/api/file/content?path=' + encodeURIComponent(path));
     var data = await res.json();
     if (data.success) {
-      content.innerHTML = marked.parse(data.content || '');
+      content.innerHTML = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(data.content || '') : '<pre style="white-space:pre-wrap;font-size:12px;">' + escapeHtml(data.content || '') + '</pre>';
     } else {
       content.innerHTML = '<p style="color:var(--accent);">加载失败</p>';
     }
@@ -1363,7 +1367,192 @@ async function scanVaultSilent() {
   } catch(e) { /* silent */ }
 }
 
-// ── Git branch management ──
+// ── File operations ──
+async function renameFile(path) {
+  var newName = prompt('输入新文件名（.md 后缀可省略）:', path.split('/').pop());
+  if (!newName) return;
+  try {
+    var res = await fetch('/api/file/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: path, new_name: newName })
+    });
+    var data = await res.json();
+    if (data.success) {
+      showToast('已重命名为: ' + data.new_name);
+      await loadMDFileList();
+      try { await scanVaultSilent(); } catch(e) {}
+    } else {
+      showToast(data.detail || '重命名失败', true);
+    }
+  } catch (e) {
+    showToast('重命名失败: ' + e.message, true);
+  }
+}
+
+async function moveFileDialog(path) {
+  try {
+    var res = await fetch('/api/folder/list');
+    var data = await res.json();
+    if (!data.success || !data.folders.length) {
+      showToast('没有可用的目标文件夹', true);
+      return;
+    }
+    var folders = data.folders.filter(function(f) { return f.path !== '.'; });
+    folders.unshift({ path: '.', name: 'root（根目录）' });
+    var msg = '选择目标文件夹:\n\n' + folders.map(function(f, i) { return (i + 1) + '. ' + f.name; }).join('\n');
+    var idx = parseInt(prompt(msg, '1'));
+    if (isNaN(idx) || idx < 1 || idx > folders.length) return;
+    var target = folders[idx - 1].path === '.' ? '' : folders[idx - 1].path;
+    var moveRes = await fetch('/api/file/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: path, target_dir: target })
+    });
+    var moveData = await moveRes.json();
+    if (moveData.success) {
+      showToast('已移动到: ' + (target || '根目录'));
+      await loadMDFileList();
+      await loadFolders();
+      try { await scanVaultSilent(); } catch(e) {}
+    } else {
+      showToast(moveData.detail || '移动失败', true);
+    }
+  } catch (e) {
+    showToast('移动失败: ' + e.message, true);
+  }
+}
+
+async function tagFileDialog(path) {
+  try {
+    var res = await fetch('/api/file/content?path=' + encodeURIComponent(path));
+    var data = await res.json();
+    var tags = (data.frontmatter && data.frontmatter.tags) ? data.frontmatter.tags : [];
+    if (typeof tags === 'string') tags = [tags];
+    tags = tags.map(function(t) { return String(t).trim().replace(/^#/, ''); }).filter(Boolean);
+    var msg = '当前标签: ' + (tags.length ? tags.join(', ') : '无') + '\n\n输入操作:\n  添加标签: +标签名\n  删除标签: -标签名';
+    var input = prompt(msg, '');
+    if (!input) return;
+    input = input.trim();
+    if (input.startsWith('+')) {
+      var tag = input.slice(1).trim();
+      if (!tag) return;
+      var addRes = await fetch('/api/file/tag/add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path, tag: tag })
+      });
+      var addData = await addRes.json();
+      if (addData.success) {
+        showToast('已添加标签: #' + tag);
+        try { await scanVaultSilent(); } catch(e) {}
+      } else {
+        showToast(addData.detail || '添加失败', true);
+      }
+    } else if (input.startsWith('-')) {
+      var tag = input.slice(1).trim();
+      if (!tag) return;
+      var rmRes = await fetch('/api/file/tag/remove', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path, tag: tag })
+      });
+      var rmData = await rmRes.json();
+      if (rmData.success) {
+        showToast('已移除标签: #' + tag);
+        try { await scanVaultSilent(); } catch(e) {}
+      } else {
+        showToast(rmData.detail || '移除失败', true);
+      }
+    }
+  } catch (e) {
+    showToast('标签操作失败: ' + e.message, true);
+  }
+}
+
+async function deleteFile(path) {
+  if (!confirm('确定删除 "' + path.split('/').pop() + '"？此操作不可恢复。')) return;
+  try {
+    var res = await fetch('/api/file/delete?path=' + encodeURIComponent(path), { method: 'DELETE' });
+    var data = await res.json();
+    if (data.success) {
+      showToast('已删除: ' + path.split('/').pop());
+      await loadMDFileList();
+      await loadFolders();
+      try { await scanVaultSilent(); } catch(e) {}
+    } else {
+      showToast(data.detail || '删除失败', true);
+    }
+  } catch (e) {
+    showToast('删除失败: ' + e.message, true);
+  }
+}
+
+// ── Folder management ──
+async function loadFolders() {
+  var container = document.getElementById('md-folder-list');
+  try {
+    var res = await fetch('/api/folder/list');
+    var data = await res.json();
+    if (!data.success || !data.folders.length) {
+      container.innerHTML = '<p style="color:var(--text-dim);font-size:11px;">暂无文件夹</p>';
+      return;
+    }
+    var html = '';
+    data.folders.forEach(function(f) {
+      var icon = f.path === '.' ? '🏠' : '📁';
+      html += '<div class="git-branch-item" onclick="moveToFolder(\'' + escapeHtml(f.path === '.' ? '' : f.path).replace(/'/g, "\\'") + '\')" title="点击选择文件夹">' +
+        '<div class="branch-icon">' + icon + '</div>' +
+        '<div class="branch-name">' + escapeHtml(f.name) + '</div>' +
+        '<div class="branch-commit" style="font-size:10px;">' + escapeHtml(f.path) + '</div>' +
+        '</div>';
+    });
+    container.innerHTML = html;
+    document.getElementById('md-git-info').textContent = data.total + ' 个文件夹 · 上传 · 下载 · 预览';
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--accent);font-size:11px;">加载文件夹失败</p>';
+  }
+}
+
+async function createFolder() {
+  var input = document.getElementById('md-new-folder-input');
+  var name = input.value.trim();
+  if (!name) { showToast('请输入文件夹名称', true); return; }
+  try {
+    var res = await fetch('/api/folder/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_name: name })
+    });
+    var data = await res.json();
+    if (data.success) {
+      showToast('已创建文件夹: ' + data.name);
+      input.value = '';
+      await loadFolders();
+    } else {
+      showToast(data.detail || '创建失败', true);
+    }
+  } catch (e) {
+    showToast('创建文件夹失败: ' + e.message, true);
+  }
+}
+
+function moveToFolder(targetDir) {
+  var path = prompt('输入要移动的文件路径（可从左侧文件列表复制）:', '');
+  if (!path) return;
+  fetch('/api/file/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path, target_dir: targetDir })
+  }).then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showToast('已移动到: ' + (targetDir || '根目录'));
+        loadMDFileList();
+        loadFolders();
+        scanVaultSilent();
+      } else {
+        showToast(data.detail || '移动失败', true);
+      }
+    })
+    .catch(function(e) { showToast('移动失败: ' + e.message, true); });
+}
+
+// ── Git branch management (保留但不再主动加载) ──
 async function loadGitBranches() {
   var container = document.getElementById('md-git-branches');
   try {

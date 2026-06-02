@@ -429,6 +429,166 @@ async def api_file_list(subdir: str = Query("", description="Relative subdirecto
     return {"success": True, "files": result, "total": len(result)}
 
 
+class FileOpRequest(BaseModel):
+    path: str
+    new_name: str = ""
+    target_dir: str = ""
+    tag: str = ""
+
+
+def _resolve_safe(fp: str) -> Path:
+    """Resolve a vault-relative path to an absolute path, ensuring it stays inside the vault."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    resolved = (VAULT_PATH / fp).resolve()
+    try:
+        resolved.relative_to(VAULT_PATH.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return resolved
+
+
+@app.post("/api/file/rename")
+async def api_file_rename(req: FileOpRequest):
+    """Rename a markdown file within the vault."""
+    fp = _resolve_safe(req.path)
+    if not req.new_name:
+        raise HTTPException(status_code=400, detail="new_name is required")
+    safe_name = Path(req.new_name).name
+    if not safe_name.endswith(".md"):
+        safe_name += ".md"
+    new_fp = fp.parent / safe_name
+    if new_fp.exists():
+        raise HTTPException(status_code=409, detail=f"'{safe_name}' already exists")
+    fp.rename(new_fp)
+    invalidate_cache()
+    new_rel = str(new_fp.relative_to(VAULT_PATH)).replace("\\", "/")
+    logger.info("Renamed: %s -> %s", req.path, new_rel)
+    return {"success": True, "old_path": req.path, "new_path": new_rel, "new_name": safe_name}
+
+
+@app.post("/api/file/move")
+async def api_file_move(req: FileOpRequest):
+    """Move a markdown file to a different folder within the vault."""
+    fp = _resolve_safe(req.path)
+    target_dir = _resolve_safe(req.target_dir) if req.target_dir else VAULT_PATH
+    if not target_dir.is_dir():
+        target_dir.mkdir(parents=True, exist_ok=True)
+    new_fp = target_dir / fp.name
+    if new_fp == fp:
+        return {"success": True, "path": req.path, "message": "Already in target directory"}
+    if new_fp.exists():
+        raise HTTPException(status_code=409, detail=f"'{fp.name}' already exists in target directory")
+    import shutil
+    shutil.move(str(fp), str(new_fp))
+    invalidate_cache()
+    new_rel = str(new_fp.relative_to(VAULT_PATH)).replace("\\", "/")
+    logger.info("Moved: %s -> %s", req.path, new_rel)
+    return {"success": True, "old_path": req.path, "new_path": new_rel}
+
+
+@app.delete("/api/file/delete")
+async def api_file_delete(path: str = Query(..., description="Relative path within vault")):
+    """Delete a markdown file from the vault."""
+    fp = _resolve_safe(path)
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    fp.unlink()
+    invalidate_cache()
+    logger.info("Deleted: %s", path)
+    return {"success": True, "path": path}
+
+
+@app.post("/api/file/tag/add")
+async def api_file_tag_add(req: FileOpRequest):
+    """Add a tag to a markdown file's frontmatter."""
+    fp = _resolve_safe(req.path)
+    if not req.tag:
+        raise HTTPException(status_code=400, detail="tag is required")
+    tag = req.tag.strip().lstrip("#")
+    with open(fp, "r", encoding="utf-8") as f:
+        raw = f.read()
+    try:
+        post = frontmatter.loads(raw)
+        fm, body = post.metadata, post.content
+    except Exception:
+        fm, body = {}, raw
+    existing = fm.get("tags", [])
+    if isinstance(existing, str):
+        existing = [existing]
+    existing = [t.strip().lstrip("#") for t in existing]
+    if tag not in existing:
+        existing.append(tag)
+    fm["tags"] = existing
+    new_raw = frontmatter.dumps(frontmatter.Post(body, **fm))
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(new_raw)
+    invalidate_cache()
+    logger.info("Tag added: %s -> #%s", req.path, tag)
+    return {"success": True, "path": req.path, "tag": tag, "tags": existing}
+
+
+@app.post("/api/file/tag/remove")
+async def api_file_tag_remove(req: FileOpRequest):
+    """Remove a tag from a markdown file's frontmatter."""
+    fp = _resolve_safe(req.path)
+    if not req.tag:
+        raise HTTPException(status_code=400, detail="tag is required")
+    tag = req.tag.strip().lstrip("#")
+    with open(fp, "r", encoding="utf-8") as f:
+        raw = f.read()
+    try:
+        post = frontmatter.loads(raw)
+        fm, body = post.metadata, post.content
+    except Exception:
+        fm, body = {}, raw
+    existing = fm.get("tags", [])
+    if isinstance(existing, str):
+        existing = [existing]
+    existing = [t.strip().lstrip("#") for t in existing]
+    if tag in existing:
+        existing.remove(tag)
+    fm["tags"] = existing
+    new_raw = frontmatter.dumps(frontmatter.Post(body, **fm))
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(new_raw)
+    invalidate_cache()
+    logger.info("Tag removed: %s -> #%s", req.path, tag)
+    return {"success": True, "path": req.path, "tag": tag, "tags": existing}
+
+
+@app.get("/api/folder/list")
+async def api_folder_list():
+    """List all subdirectories in the vault that contain .md files."""
+    if not VAULT_PATH:
+        raise HTTPException(status_code=503, detail="Vault not configured")
+    folders = set()
+    for md_file in VAULT_PATH.rglob("*.md"):
+        parts = md_file.relative_to(VAULT_PATH).parts
+        if any(p.startswith(".") for p in parts):
+            continue
+        if ".agents" in parts:
+            continue
+        parent = md_file.parent.relative_to(VAULT_PATH)
+        folders.add(str(parent).replace("\\", "/"))
+    result = [{"path": f, "name": Path(f).name if f != "." else "root"} for f in sorted(folders)]
+    return {"success": True, "folders": result, "total": len(result)}
+
+
+@app.post("/api/folder/create")
+async def api_folder_create(req: FileOpRequest):
+    """Create a new folder inside the vault."""
+    if not req.new_name:
+        raise HTTPException(status_code=400, detail="new_name is required")
+    safe_name = Path(req.new_name).name
+    target = VAULT_PATH / safe_name
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"'{safe_name}' already exists")
+    target.mkdir(parents=True)
+    logger.info("Folder created: %s", safe_name)
+    return {"success": True, "path": str(target.relative_to(VAULT_PATH)).replace("\\", "/"), "name": safe_name}
+
+
 @app.get("/api/search")
 async def api_search(q: str = Query(""), tags: str = Query("")):
     data = get_cached_scan()
@@ -583,9 +743,9 @@ async def api_hidden_links():
     sn = sorted(nodes, key=lambda n: n["importance"], reverse=True)[:80]
     ctx = _build_notes_context(sn, max_summary_len=120)
     prompt = (
-        "Find up to 8 pairs of notes that discuss related concepts but are probably NOT linked. "
-        "For each: note_a, note_b, connection (one sentence), strength ('strong'|'weak').\n"
-        "Notes:\n" + json.dumps(ctx, ensure_ascii=False, indent=2) +
+        "找出最多8对讨论了相关概念但尚未建立链接的笔记。"
+        "每对包含：note_a（笔记A标题）、note_b（笔记B标题）、connection（用中文写一句关联说明）、strength（'strong'或'weak'）。\n"
+        "笔记列表:\n" + json.dumps(ctx, ensure_ascii=False, indent=2) +
         "\n\nOutput JSON: {\"links\":[{\"note_a\":\"...\",\"note_b\":\"...\",\"connection\":\"...\",\"strength\":\"strong\"}]}"
     )
     try:
