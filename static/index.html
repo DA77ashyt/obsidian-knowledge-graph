@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obsidian 知识图谱分析平台</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  --bg: #1a1a2e;
+  --bg-panel: #16213e;
+  --bg-card: #0f3460;
+  --text: #e0e0e0;
+  --text-dim: #8892b0;
+  --accent: #e94560;
+  --accent2: #533483;
+  --border: #2a2a4a;
+  --highlight: #f5c518;
+  --green: #00b894;
+  --blue: #00b4d8;
+  --orange: #fdcb6e;
+  --node-colors: #e94560 #f5c518 #00b4d8 #00b894 #a29bfe #fd79a8 #fdcb6e #6c5ce7;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden;
+}
+/* Sidebar */
+#sidebar {
+  width: 280px; min-width: 280px; background: var(--bg-panel);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  padding: 20px; gap: 16px; overflow-y: auto; z-index: 10;
+}
+#sidebar h1 { font-size: 18px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+#sidebar .subtitle { font-size: 11px; color: var(--text-dim); margin-top: -12px; }
+.btn {
+  padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer;
+  font-size: 14px; font-weight: 600; transition: all .2s; width: 100%;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #d63a54; }
+.btn-secondary { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: #1a4a7a; }
+.btn-ai { background: linear-gradient(135deg, #533483, #e94560); color: #fff; margin-top: auto; }
+.btn-ai:hover { opacity: .9; transform: translateY(-1px); }
+.search-box { position: relative; }
+.search-box input {
+  width: 100%; padding: 10px 12px 10px 36px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 13px; outline: none; transition: border-color .2s;
+}
+.search-box input:focus { border-color: var(--accent); }
+.search-box .search-icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--text-dim); font-size: 14px;
+}
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip {
+  padding: 4px 10px; border-radius: 20px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-dim);
+  transition: all .2s; user-select: none;
+}
+.tag-chip:hover { border-color: var(--accent); color: var(--text); }
+.tag-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.filter-section h3 { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+.stats { font-size: 12px; color: var(--text-dim); display: flex; gap: 12px; flex-wrap: wrap; }
+.stats span { background: var(--bg); padding: 4px 8px; border-radius: 4px; }
+/* Canvas */
+#canvas-container { flex: 1; position: relative; cursor: grab; }
+#canvas-container:active { cursor: grabbing; }
+#canvas-container canvas { display: block; }
+.graph-tooltip {
+  position: absolute; pointer-events: none; background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+  font-size: 12px; display: none; z-index: 100; max-width: 260px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+.graph-tooltip .tt-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+.graph-tooltip .tt-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.graph-tooltip .tt-tag {
+  font-size: 10px; padding: 2px 8px; border-radius: 10px;
+  background: var(--bg-card); color: var(--text-dim);
+}
+/* Detail Panel */
+#detail-panel {
+  width: 0; background: var(--bg-panel); border-left: 1px solid var(--border);
+  overflow: hidden; transition: width .3s ease; display: flex; flex-direction: column;
+}
+#detail-panel.open { width: 340px; min-width: 340px; }
+#detail-panel .panel-inner { padding: 24px; overflow-y: auto; flex: 1; display: none; }
+#detail-panel.open .panel-inner { display: block; }
+#detail-panel .close-btn {
+  position: absolute; top: 16px; right: 16px; background: none; border: none;
+  color: var(--text-dim); font-size: 20px; cursor: pointer;
+}
+#detail-panel h2 { font-size: 18px; margin-bottom: 8px; }
+#detail-panel .meta { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+#detail-panel .section { margin-bottom: 16px; }
+#detail-panel .section h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px; }
+#detail-panel .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+#detail-panel .tags span { font-size: 11px; padding: 3px 10px; border-radius: 12px; background: var(--bg-card); color: var(--accent); }
+#detail-panel .summary { font-size: 13px; line-height: 1.6; color: #ccc; }
+/* Modal */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.7);
+  display: none; justify-content: center; align-items: center; z-index: 200;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 16px;
+  padding: 24px 28px; max-width: 760px; width: 92%; max-height: 82vh; display: flex; flex-direction: column;
+  box-shadow: 0 16px 64px rgba(0,0,0,.5);
+}
+.modal h2 { font-size: 20px; margin-bottom: 4px; }
+.modal .modal-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+.modal-close {
+  position: absolute; top: 16px; right: 20px; background: none; border: none;
+  color: var(--text-dim); font-size: 22px; cursor: pointer; z-index: 10;
+}
+.modal-header { position: relative; flex-shrink: 0; }
+/* AI Tabs */
+.ai-tabs {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 16px; flex-shrink: 0;
+}
+.ai-tab {
+  padding: 8px 16px; font-size: 13px; cursor: pointer; border: none; background: none;
+  color: var(--text-dim); border-bottom: 2px solid transparent; transition: all .2s;
+  font-family: inherit; white-space: nowrap;
+}
+.ai-tab:hover { color: var(--text); }
+.ai-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.ai-tab-content { flex: 1; overflow-y: auto; min-height: 0; }
+.ai-tab-panel { display: none; }
+.ai-tab-panel.active { display: block; }
+/* Cluster Card */
+.cluster-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; margin-bottom: 10px; border-left: 4px solid var(--accent);
+  transition: all .2s;
+}
+.cluster-card:hover { border-color: var(--highlight); }
+.cluster-card h3 { font-size: 14px; margin-bottom: 4px; }
+.cluster-card .cluster-desc { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
+.cluster-card .cluster-notes { display: flex; flex-wrap: wrap; gap: 6px; }
+.cluster-card .cluster-note {
+  font-size: 11px; padding: 4px 10px; border-radius: 14px;
+  background: var(--bg-card); color: var(--text); cursor: pointer;
+  transition: all .2s;
+}
+.cluster-card .cluster-note:hover { background: var(--accent); color: #fff; }
+/* Insight Cards */
+.insight-section { margin-bottom: 20px; }
+.insight-section h3 {
+  font-size: 13px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+}
+.insight-item {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 6px; font-size: 12px;
+}
+.insight-item .insight-title { font-weight: 600; margin-bottom: 2px; }
+.insight-item .insight-reason { color: var(--text-dim); font-size: 11px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.badge-red { background: rgba(233,69,96,.2); color: var(--accent); }
+.badge-green { background: rgba(0,184,148,.2); color: var(--green); }
+.badge-yellow { background: rgba(253,203,110,.2); color: var(--orange); }
+.badge-blue { background: rgba(0,180,216,.2); color: var(--blue); }
+/* Timeline */
+.timeline-bar-row { display: flex; align-items: center; margin-bottom: 10px; gap: 10px; }
+.timeline-label { width: 72px; font-size: 11px; color: var(--text-dim); text-align: right; flex-shrink: 0; }
+.timeline-bar-wrap { flex: 1; background: var(--bg); border-radius: 4px; height: 24px; position: relative; overflow: hidden; }
+.timeline-bar {
+  height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--accent2), var(--accent));
+  display: flex; align-items: center; padding-left: 8px; font-size: 11px; font-weight: 600;
+  transition: width .4s ease;
+}
+.timeline-theme { font-size: 11px; color: var(--text-dim); width: 120px; flex-shrink: 0; }
+.timeline-evolution { font-size: 12px; color: var(--highlight); margin-top: 12px; padding: 10px; background: var(--bg); border-radius: 8px; border-left: 3px solid var(--highlight); }
+/* Hidden Links */
+.hidden-link-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
+}
+.hidden-link-card .hl-connector { color: var(--accent); font-size: 18px; flex-shrink: 0; }
+.hidden-link-card .hl-info { flex: 1; }
+.hidden-link-card .hl-titles { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.hidden-link-card .hl-titles span { cursor: pointer; color: var(--blue); }
+.hidden-link-card .hl-titles span:hover { text-decoration: underline; }
+.hidden-link-card .hl-reason { font-size: 11px; color: var(--text-dim); }
+.hidden-link-card .hl-strength {
+  font-size: 10px; padding: 3px 10px; border-radius: 12px; flex-shrink: 0;
+}
+.hl-strong { background: rgba(0,184,148,.2); color: var(--green); }
+.hl-weak { background: rgba(253,203,110,.15); color: var(--orange); }
+/* Q&A Chat */
+.qa-answer {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 12px; font-size: 13px; line-height: 1.7;
+  white-space: pre-wrap; max-height: 300px; overflow-y: auto;
+}
+.qa-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.qa-source {
+  font-size: 11px; padding: 4px 10px; border-radius: 12px;
+  background: var(--bg-card); color: var(--blue); cursor: pointer;
+}
+.qa-source:hover { background: var(--accent); color: #fff; }
+.qa-input-row { display: flex; gap: 8px; }
+.qa-input-row input {
+  flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px; outline: none;
+}
+.qa-input-row input:focus { border-color: var(--accent); }
+.qa-input-row button {
+  padding: 10px 18px; border-radius: 8px; border: none; background: var(--accent);
+  color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.qa-input-row button:hover { background: #d63a54; }
+/* Loading */
+.loading {
+  display: none; text-align: center; padding: 40px;
+}
+.loading.show { display: block; }
+.spinner {
+  width: 40px; height: 40px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite; margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner-sm {
+  width: 18px; height: 18px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .6s linear infinite; display: inline-block; vertical-align: middle;
+}
+/* Toast */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card); color: var(--text); padding: 12px 24px;
+  border-radius: 8px; font-size: 13px; z-index: 300; opacity: 0;
+  transition: opacity .3s; pointer-events: none; border: 1px solid var(--border);
+}
+.toast.show { opacity: 1; }
+.toast.error { border-color: var(--accent); }
+.empty-state {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  text-align: center; color: var(--text-dim);
+}
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <h1>🧠 知识图谱</h1>
+  <p class="subtitle">Obsidian Vault · AI 多维分析</p>
+
+  <button class="btn btn-primary" onclick="scanVault()" id="btn-scan">🔍 扫描 Vault</button>
+
+  <div class="filter-section">
+    <h3>搜索</h3>
+    <div class="search-box">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="搜索笔记标题或内容..." oninput="onSearch()">
+    </div>
+  </div>
+
+  <div class="filter-section">
+    <h3>标签过滤</h3>
+    <div class="tag-chips" id="tag-chips"></div>
+  </div>
+
+  <div class="stats" id="stats">
+    <span>节点: 0</span><span>连线: 0</span>
+  </div>
+
+  <button class="btn btn-ai" onclick="runAIAnalysis()" id="btn-ai">🤖 AI 多维分析</button>
+</div>
+
+<!-- Canvas -->
+<div id="canvas-container">
+  <canvas id="graph-canvas"></canvas>
+  <div class="graph-tooltip" id="graph-tooltip"></div>
+  <div class="empty-state" id="empty-state">
+    <div class="icon">📂</div>
+    <p>点击「扫描 Vault」开始</p>
+  </div>
+</div>
+
+<!-- Detail Panel -->
+<div id="detail-panel">
+  <div class="panel-inner" id="panel-inner"></div>
+</div>
+
+<!-- AI Modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<!-- Loading -->
+<div class="loading" id="loading">
+  <div class="spinner"></div>
+  <p id="loading-text">扫描中...</p>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──
+let graphData = { nodes: [], edges: [] };
+let allTags = [];
+let activeTags = new Set();
+let selectedNode = null;
+let searchQuery = '';
+
+// AI analysis cache
+let aiCache = {};
+
+// D3 objects
+let simulation, canvas, ctx, zoom;
+let nodeElements = [], edgeElements = [];
+let width, height;
+
+// ── API ──
+const API = {
+  async scan() {
+    const res = await fetch('/api/vault/scan');
+    if (!res.ok) throw new Error((await res.json()).detail || 'Scan failed');
+    return (await res.json()).data;
+  },
+  async fileContent(path) {
+    const res = await fetch(`/api/file/content?path=${encodeURIComponent(path)}`);
+    return (await res.json()).content;
+  },
+  async cluster() {
+    const res = await fetch('/api/analysis/cluster', { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Cluster failed');
+    return await res.json();
+  },
+  async timeline() {
+    const res = await fetch('/api/analysis/timeline', { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Timeline failed');
+    return await res.json();
+  },
+  async hiddenLinks() {
+    const res = await fetch('/api/analysis/hidden-links', { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Hidden links failed');
+    return await res.json();
+  },
+  async ask(question) {
+    const res = await fetch('/api/analysis/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Q&A failed');
+    return await res.json();
+  }
+};
+
+// ── Toast ──
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(t._timeout);
+  t._timeout = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ── Loading ──
+function showLoading(text) {
+  document.getElementById('loading-text').textContent = text;
+  document.getElementById('loading').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.remove('show');
+}
+
+// ── Scan Vault ──
+async function scanVault() {
+  showLoading('扫描 Vault 中...');
+  try {
+    graphData = await API.scan();
+    hideLoading();
+    document.getElementById('empty-state').style.display = 'none';
+    buildTagChips();
+    updateStats();
+    initGraph();
+    showToast(`扫描完成：${graphData.total} 个笔记，${graphData.edges.length} 条关联`);
+  } catch (e) {
+    hideLoading();
+    showToast(e.message, true);
+  }
+}
+
+// ── Tag Chips ──
+function buildTagChips() {
+  const tagCounts = {};
+  graphData.nodes.forEach(n => {
+    n.tags.forEach(t => {
+      if (t.length >= 2) tagCounts[t] = (tagCounts[t] || 0) + 1;
+    });
+  });
+  allTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
+
+  const container = document.getElementById('tag-chips');
+  container.innerHTML = allTags.map(([tag, count]) =>
+    `<span class="tag-chip" data-tag="${tag}" onclick="toggleTag('${tag.replace(/'/g, "\\'")}')">${tag} (${count})</span>`
+  ).join('');
+}
+
+function toggleTag(tag) {
+  if (activeTags.has(tag)) { activeTags.delete(tag); }
+  else { activeTags.add(tag); }
+  document.querySelectorAll('.tag-chip').forEach(chip => {
+    chip.classList.toggle('active', activeTags.has(chip.dataset.tag));
+  });
+  filterGraph();
+}
+
+// ── Search ──
+let searchTimer;
+function onSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = document.getElementById('search-input').value.trim().toLowerCase();
+    filterGraph();
+  }, 300);
+}
+
+function filterGraph() {
+  if (!simulation) return;
+  nodeElements.forEach(n => {
+    let visible = true;
+    if (activeTags.size > 0) {
+      visible = n.tags.some(t => activeTags.has(t));
+    }
+    if (visible && searchQuery) {
+      const searchable = `${n.title} ${n.tags.join(' ')} ${n.summary}`.toLowerCase();
+      visible = searchable.includes(searchQuery);
+    }
+    n.visible = visible;
+    n.opacity = visible ? 1 : 0.1;
+  });
+  render();
+}
+
+// ── Stats ──
+function updateStats() {
+  document.getElementById('stats').innerHTML =
+    `<span>节点: ${graphData.total}</span><span>连线: ${graphData.edges.length}</span>`;
+}
+
+// ── Domain Colors ──
+const DOMAIN_COLORS = [
+  '#e94560', '#f5c518', '#00b4d8', '#00b894', '#a29bfe', '#fd79a8', '#fdcb6e', '#6c5ce7'
+];
+const domainColorMap = {};
+
+function getNodeColor(node) {
+  if (!domainColorMap[node.domain]) {
+    const idx = Object.keys(domainColorMap).length % DOMAIN_COLORS.length;
+    domainColorMap[node.domain] = DOMAIN_COLORS[idx];
+  }
+  return domainColorMap[node.domain];
+}
+
+function getNodeRadius(node) {
+  return 6 + Math.min(node.importance * 2.5, 16);
+}
+
+// ── Graph ──
+function initGraph() {
+  const container = document.getElementById('canvas-container');
+  canvas = document.getElementById('graph-canvas');
+  ctx = canvas.getContext('2d');
+
+  const rect = container.getBoundingClientRect();
+  width = rect.width;
+  height = rect.height;
+  canvas.width = width * devicePixelRatio;
+  canvas.height = height * devicePixelRatio;
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  const nodes = graphData.nodes.map((n, i) => ({
+    ...n,
+    x: width / 2 + (Math.random() - 0.5) * 200,
+    y: height / 2 + (Math.random() - 0.5) * 200,
+    fx: null, fy: null,
+    opacity: 1, visible: true,
+  }));
+
+  const edges = graphData.edges.map(e => ({
+    source: nodes.find(n => n.id === e.source) || e.source,
+    target: nodes.find(n => n.id === e.target) || e.target,
+    type: e.type,
+  }));
+
+  if (simulation) { simulation.stop(); }
+
+  simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(edges).id(d => d.id).distance(d => {
+      return d.type === 'wiki-link' ? 80 : d.type === 'tag-shared' ? 120 : 150;
+    }))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(d => getNodeRadius(d) + 4))
+    .on('tick', render);
+
+  nodeElements = nodes;
+  edgeElements = edges;
+
+  d3.select(canvas).call(d3.drag()
+    .container(canvas)
+    .subject(event => {
+      const [mx, my] = d3.pointer(event, canvas);
+      return findNode(mx, my);
+    })
+    .on('start', (event, d) => {
+      if (!d) return;
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x; d.fy = d.y;
+    })
+    .on('drag', (event, d) => {
+      if (!d) return;
+      d.fx = event.x; d.fy = event.y;
+    })
+    .on('end', (event, d) => {
+      if (!d) return;
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null; d.fy = null;
+    })
+  );
+
+  canvas.onwheel = event => {
+    event.preventDefault();
+    const scale = event.deltaY > 0 ? 0.9 : 1.1;
+    const rect = canvas.getBoundingClientRect();
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
+    simulation.nodes().forEach(n => {
+      n.x = mx + (n.x - mx) * scale;
+      n.y = my + (n.y - my) * scale;
+    });
+    simulation.alpha(0.1).restart();
+  };
+
+  canvas.onclick = event => {
+    const [mx, my] = d3.pointer(event, canvas);
+    const node = findNode(mx, my);
+    if (node) { selectNode(node); }
+    else { deselectNode(); }
+  };
+
+  canvas.onmousemove = event => {
+    const [mx, my] = d3.pointer(event, canvas);
+    const node = findNode(mx, my);
+    const tooltip = document.getElementById('graph-tooltip');
+    if (node && node.visible) {
+      tooltip.style.display = 'block';
+      tooltip.style.left = (event.clientX + 16) + 'px';
+      tooltip.style.top = (event.clientY - 40) + 'px';
+      tooltip.innerHTML = `
+        <div class="tt-title" style="color:${getNodeColor(node)}">${node.title}</div>
+        <div style="font-size:11px;color:var(--text-dim)">${node.domain} · ${node.mtime}</div>
+        ${node.tags.length ? `<div class="tt-tags">${node.tags.map(t => `<span class="tt-tag">#${t}</span>`).join('')}</div>` : ''}
+      `;
+      canvas.style.cursor = 'pointer';
+    } else {
+      tooltip.style.display = 'none';
+      canvas.style.cursor = selectedNode ? 'default' : 'grab';
+    }
+  };
+
+  window.addEventListener('resize', () => {
+    const rect = container.getBoundingClientRect();
+    width = rect.width;
+    height = rect.height;
+    canvas.width = width * devicePixelRatio;
+    canvas.height = height * devicePixelRatio;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    simulation.alpha(0.1).restart();
+  });
+
+  filterGraph();
+}
+
+function findNode(mx, my) {
+  for (let i = nodeElements.length - 1; i >= 0; i--) {
+    const n = nodeElements[i];
+    if (!n.visible) continue;
+    const r = getNodeRadius(n) + 4;
+    const dx = n.x - mx;
+    const dy = n.y - my;
+    if (dx * dx + dy * dy < r * r) return n;
+  }
+  return null;
+}
+
+function render() {
+  ctx.clearRect(0, 0, width, height);
+  edgeElements.forEach(e => {
+    const src = typeof e.source === 'object' ? e.source : nodeElements.find(n => n.id === e.source);
+    const tgt = typeof e.target === 'object' ? e.target : nodeElements.find(n => n.id === e.target);
+    if (!src || !tgt) return;
+    if (!src.visible || !tgt.visible) return;
+    ctx.beginPath();
+    ctx.moveTo(src.x, src.y);
+    ctx.lineTo(tgt.x, tgt.y);
+    if (e.type === 'wiki-link') {
+      ctx.strokeStyle = 'rgba(233, 69, 96, 0.5)';
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.5;
+    } else if (e.type === 'tag-shared') {
+      ctx.strokeStyle = 'rgba(100, 120, 160, 0.3)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+    } else {
+      ctx.strokeStyle = 'rgba(100, 120, 160, 0.15)';
+      ctx.setLineDash([2, 6]);
+      ctx.lineWidth = 0.5;
+    }
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  nodeElements.forEach(n => {
+    const r = getNodeRadius(n);
+    const alpha = n.opacity || 1;
+    if (n === selectedNode) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r + 6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(245, 197, 24, ${0.3 * alpha})`;
+      ctx.fill();
+    }
+    if (selectedNode && n !== selectedNode) {
+      const isNeighbor = edgeElements.some(e => {
+        const sId = typeof e.source === 'object' ? e.source.id : e.source;
+        const tId = typeof e.target === 'object' ? e.target.id : e.target;
+        return (sId === selectedNode.id && tId === n.id) || (tId === selectedNode.id && sId === n.id);
+      });
+      if (isNeighbor) {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(245, 197, 24, ${0.15 * alpha})`;
+        ctx.fill();
+      }
+    }
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    const color = getNodeColor(n);
+    if (!n.visible || n.opacity < 0.3) {
+      ctx.fillStyle = `rgba(60, 60, 80, ${alpha})`;
+    } else {
+      ctx.fillStyle = color;
+    }
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255,255,255,${0.2 * alpha})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (r > 8 && n.visible && n.opacity > 0.5) {
+      const label = n.title.length > 12 ? n.title.slice(0, 12) + '..' : n.title;
+      ctx.fillStyle = `rgba(255,255,255,${0.9 * alpha})`;
+      ctx.font = `${Math.max(9, r * 0.7)}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(label, n.x, n.y + r + 14);
+    }
+  });
+}
+
+// ── Selection ──
+function selectNode(node) {
+  selectedNode = node;
+  render();
+  showDetail(node);
+}
+
+function deselectNode() {
+  selectedNode = null;
+  render();
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+function showDetail(node) {
+  const panel = document.getElementById('detail-panel');
+  const inner = document.getElementById('panel-inner');
+  const neighborEdges = edgeElements.filter(e => {
+    const sId = typeof e.source === 'object' ? e.source.id : e.source;
+    const tId = typeof e.target === 'object' ? e.target.id : e.target;
+    return sId === node.id || tId === node.id;
+  });
+  inner.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:start;">
+      <h2 style="color:${getNodeColor(node)}">${node.title}</h2>
+      <button class="close-btn" onclick="deselectNode()" style="position:static;">✕</button>
+    </div>
+    <div class="meta">${node.path}</div>
+    <div class="section"><h3>标签</h3><div class="tags">${node.tags.length ? node.tags.map(t => `<span>#${t}</span>`).join('') : '<span style="color:var(--text-dim)">无标签</span>'}</div></div>
+    <div class="section"><h3>摘要</h3><p class="summary">${node.summary || '（无内容摘要）'}</p></div>
+    <div class="section"><h3>链接</h3><p style="font-size:12px;color:var(--text-dim)">${node.links.length ? node.links.map(l => `[[${l}]]`).join(', ') : '无 Wiki 链接'}<br>关联节点: ${neighborEdges.length} 个</p></div>
+    <div class="meta">最后修改: ${node.mtime}<br>所属领域: ${node.domain}</div>
+  `;
+  panel.classList.add('open');
+}
+
+function focusNode(title) {
+  const node = nodeElements.find(n => n.title.toLowerCase() === title.toLowerCase() ||
+    n.title.toLowerCase().includes(title.toLowerCase()) || title.toLowerCase().includes(n.title.toLowerCase()));
+  if (node) {
+    selectNode(node);
+    nodeElements.forEach(n => {
+      n.x += width / 2 - node.x;
+      n.y += height / 2 - node.y;
+    });
+    if (simulation) simulation.alpha(0.3).restart();
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  AI Multi-Analysis — Tabbed Modal
+// ═══════════════════════════════════════════════
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+async function runAIAnalysis() {
+  if (!graphData.nodes.length) {
+    showToast('请先扫描 Vault', true);
+    return;
+  }
+
+  const modal = document.getElementById('modal-overlay');
+  const content = document.getElementById('modal-content');
+
+  modal.classList.add('show');
+  content.innerHTML = `
+    <div class="modal-header">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2>🤖 AI 多维分析</h2>
+      <p class="modal-sub">聚类 · 体检 · 时间线 · 隐含关联 · 智能问答</p>
+    </div>
+    <div class="ai-tabs">
+      <button class="ai-tab active" onclick="switchAITab('cluster')" id="tab-cluster">知识聚类</button>
+      <button class="ai-tab" onclick="switchAITab('insights')" id="tab-insights">知识体检</button>
+      <button class="ai-tab" onclick="switchAITab('timeline')" id="tab-timeline">时间线</button>
+      <button class="ai-tab" onclick="switchAITab('hidden')" id="tab-hidden">隐含关联</button>
+      <button class="ai-tab" onclick="switchAITab('ask')" id="tab-ask">智能问答</button>
+    </div>
+    <div class="ai-tab-content">
+      <div class="ai-tab-panel active" id="panel-cluster"><div class="loading show"><div class="spinner"></div><p>AI 正在分析...</p></div></div>
+      <div class="ai-tab-panel" id="panel-insights"><div class="loading show"><div class="spinner"></div><p>分析中...</p></div></div>
+      <div class="ai-tab-panel" id="panel-timeline"><div class="loading show"><div class="spinner"></div><p>加载时间线...</p></div></div>
+      <div class="ai-tab-panel" id="panel-hidden"><div class="loading show"><div class="spinner"></div><p>发现隐含关联...</p></div></div>
+      <div class="ai-tab-panel" id="panel-ask">
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">向你的知识库提问，AI 会基于笔记内容回答</p>
+        <div class="qa-input-row">
+          <input type="text" id="qa-input" placeholder="例如：我关于微调的笔记有哪些？" onkeydown="if(event.key==='Enter')sendAskQuestion()">
+          <button onclick="sendAskQuestion()">提问</button>
+        </div>
+        <div id="qa-result" style="margin-top:16px;"></div>
+      </div>
+    </div>
+  `;
+
+  // Auto-load cluster (which also loads insights from same response)
+  loadClusterAndInsights();
+}
+
+function switchAITab(name) {
+  // Update tab buttons
+  document.querySelectorAll('.ai-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+
+  // Update panels
+  document.querySelectorAll('.ai-tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+
+  // Lazy load
+  if (name === 'timeline' && !aiCache.timeline) loadTimelineData();
+  if (name === 'hidden' && !aiCache.hiddenLinks) loadHiddenLinksData();
+}
+
+// ── Cluster + Insights (P0) ──
+
+async function loadClusterAndInsights() {
+  if (aiCache.cluster) {
+    renderClusters(aiCache.cluster);
+    renderInsights(aiCache.insights);
+    return;
+  }
+
+  try {
+    const data = await API.cluster();
+    // Normalize: API now returns { clusters, insights }
+    const clusters = data.clusters || [];
+    const insights = data.insights || null;
+
+    aiCache.cluster = clusters;
+    aiCache.insights = insights;
+
+    renderClusters(clusters);
+    renderInsights(insights);
+  } catch (e) {
+    document.getElementById('panel-cluster').innerHTML = `<p style="color:var(--accent);font-size:13px;">聚类失败：${e.message}</p>`;
+    document.getElementById('panel-insights').innerHTML = `<p style="color:var(--accent);font-size:13px;">体检依赖于聚类分析</p>`;
+  }
+}
+
+function renderClusters(clusters) {
+  const panel = document.getElementById('panel-cluster');
+  if (!clusters.length) {
+    panel.innerHTML = '<p style="color:var(--text-dim);font-size:13px;">未发现明显的知识聚类</p>';
+    return;
+  }
+  panel.innerHTML = `
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">AI 将你的知识库分为 ${clusters.length} 个主题聚类</p>
+    ${clusters.map((c, i) => `
+      <div class="cluster-card" style="border-left-color:${DOMAIN_COLORS[i % DOMAIN_COLORS.length]}">
+        <h3 style="color:${DOMAIN_COLORS[i % DOMAIN_COLORS.length]}">${c.cluster_name}</h3>
+        <p class="cluster-desc">${c.description || ''}</p>
+        <div class="cluster-notes">
+          ${(c.notes || []).map(n => `<span class="cluster-note" onclick="focusNode('${n.replace(/'/g, "\\'")}');closeModal();">${n}</span>`).join('')}
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderInsights(insights) {
+  const panel = document.getElementById('panel-insights');
+  if (!insights) {
+    panel.innerHTML = '<p style="color:var(--text-dim);font-size:13px;">聚类分析完成后自动生成体检报告</p>';
+    return;
+  }
+
+  let html = '';
+
+  // Orphans
+  if (insights.orphans && insights.orphans.length) {
+    html += `<div class="insight-section"><h3><span class="badge badge-red">🔴</span> 知识孤岛</h3>`;
+    insights.orphans.forEach(o => {
+      html += `<div class="insight-item"><div class="insight-title" style="cursor:pointer;color:var(--blue)" onclick="focusNode('${o.title.replace(/'/g, "\\'")}');closeModal();">${o.title}</div><div class="insight-reason">${o.reason}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Hubs
+  if (insights.hubs && insights.hubs.length) {
+    html += `<div class="insight-section"><h3><span class="badge badge-green">🟢</span> 枢纽节点</h3>`;
+    insights.hubs.forEach(h => {
+      html += `<div class="insight-item"><div class="insight-title" style="cursor:pointer;color:var(--blue)" onclick="focusNode('${h.title.replace(/'/g, "\\'")}');closeModal();">${h.title}</div><div class="insight-reason">${h.reason}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Blindspots
+  if (insights.blindspots && insights.blindspots.length) {
+    html += `<div class="insight-section"><h3><span class="badge badge-yellow">🟡</span> 知识盲区</h3>`;
+    insights.blindspots.forEach(b => {
+      html += `<div class="insight-item"><div class="insight-title">${b.topic}</div><div class="insight-reason">${b.evidence}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Bridges
+  if (insights.bridges && insights.bridges.length) {
+    html += `<div class="insight-section"><h3><span class="badge badge-blue">🔵</span> 跨域桥接</h3>`;
+    insights.bridges.forEach(b => {
+      html += `<div class="insight-item">
+        <div class="insight-title">
+          <span style="cursor:pointer;color:var(--blue)" onclick="focusNode('${b.note_a.replace(/'/g, "\\'")}');closeModal();">${b.note_a}</span>
+          ↔
+          <span style="cursor:pointer;color:var(--blue)" onclick="focusNode('${b.note_b.replace(/'/g, "\\'")}');closeModal();">${b.note_b}</span>
+        </div>
+        <div class="insight-reason">${b.reason}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  if (!html) {
+    html = '<p style="color:var(--text-dim);font-size:13px;">知识库规模较小，暂无明显体检发现。再多写一些笔记吧！</p>';
+  }
+
+  panel.innerHTML = html;
+}
+
+// ── Timeline (P2) ──
+
+async function loadTimelineData() {
+  const panel = document.getElementById('panel-timeline');
+  panel.innerHTML = '<div class="loading show"><div class="spinner"></div><p>分析时间线...</p></div>';
+
+  try {
+    const data = await API.timeline();
+    aiCache.timeline = data;
+    renderTimeline(data);
+  } catch (e) {
+    panel.innerHTML = `<p style="color:var(--accent);font-size:13px;">时间线分析失败：${e.message}</p>`;
+  }
+}
+
+function renderTimeline(data) {
+  const panel = document.getElementById('panel-timeline');
+  const quarters = data.quarters || [];
+  const labels = data.ai_labels || [];
+  const evolution = data.evolution || '';
+
+  if (!quarters.length) {
+    panel.innerHTML = '<p style="color:var(--text-dim);font-size:13px;">暂无时间数据</p>';
+    return;
+  }
+
+  const maxCount = Math.max(...quarters.map(q => q.count));
+  const labelMap = {};
+  labels.forEach(l => { labelMap[l.quarter] = l.theme; });
+
+  let html = '';
+  quarters.forEach(q => {
+    const pct = maxCount > 0 ? Math.max((q.count / maxCount) * 100, 8) : 0;
+    const theme = labelMap[q.quarter] || '';
+    html += `
+      <div class="timeline-bar-row">
+        <div class="timeline-label">${q.quarter}</div>
+        <div class="timeline-bar-wrap">
+          <div class="timeline-bar" style="width:${pct}%">${q.count}篇</div>
+        </div>
+        <div class="timeline-theme">${theme}</div>
+      </div>`;
+  });
+
+  if (evolution) {
+    html += `<div class="timeline-evolution">📈 ${evolution}</div>`;
+  }
+
+  panel.innerHTML = html;
+}
+
+// ── Hidden Links (P1) ──
+
+async function loadHiddenLinksData() {
+  const panel = document.getElementById('panel-hidden');
+  panel.innerHTML = '<div class="loading show"><div class="spinner"></div><p>AI 正在发现隐含关联...</p></div>';
+
+  try {
+    const data = await API.hiddenLinks();
+    aiCache.hiddenLinks = data;
+    renderHiddenLinks(data);
+  } catch (e) {
+    panel.innerHTML = `<p style="color:var(--accent);font-size:13px;">隐含关联分析失败：${e.message}</p>`;
+  }
+}
+
+function renderHiddenLinks(data) {
+  const panel = document.getElementById('panel-hidden');
+  const links = data.links || [];
+
+  if (!links.length) {
+    panel.innerHTML = '<p style="color:var(--text-dim);font-size:13px;">未发现显著的隐含关联，笔记之间关联比较充分</p>';
+    return;
+  }
+
+  let html = `<p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">发现 ${links.length} 对可能遗漏的关联</p>`;
+  links.forEach(l => {
+    const cls = l.strength === 'strong' ? 'hl-strong' : 'hl-weak';
+    html += `
+      <div class="hidden-link-card">
+        <div class="hl-connector">🔗</div>
+        <div class="hl-info">
+          <div class="hl-titles">
+            <span onclick="focusNode('${l.note_a.replace(/'/g, "\\'")}');closeModal();">${l.note_a}</span>
+            ↔
+            <span onclick="focusNode('${l.note_b.replace(/'/g, "\\'")}');closeModal();">${l.note_b}</span>
+          </div>
+          <div class="hl-reason">${l.connection}</div>
+        </div>
+        <div class="hl-strength ${cls}">${l.strength === 'strong' ? '强关联' : '弱关联'}</div>
+      </div>`;
+  });
+
+  panel.innerHTML = html;
+}
+
+// ── Q&A (P3) ──
+
+async function sendAskQuestion() {
+  const input = document.getElementById('qa-input');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const resultDiv = document.getElementById('qa-result');
+  resultDiv.innerHTML = '<div class="loading show" style="padding:20px;"><div class="spinner-sm"></div> AI 正在检索并回答...</div>';
+  input.disabled = true;
+
+  try {
+    const data = await API.ask(question);
+    let html = `<div class="qa-answer">${data.answer}</div>`;
+    if (data.sources && data.sources.length) {
+      html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">参考笔记：</div><div class="qa-sources">';
+      data.sources.forEach(s => {
+        html += `<span class="qa-source" onclick="focusNode('${s.title.replace(/'/g, "\\'")}');closeModal();">📄 ${s.title}</span>`;
+      });
+      html += '</div>';
+    }
+    resultDiv.innerHTML = html;
+  } catch (e) {
+    resultDiv.innerHTML = `<p style="color:var(--accent);font-size:13px;">问答失败：${e.message}</p>`;
+  }
+
+  input.disabled = false;
+  input.focus();
+}
+</script>
+</body>
+</html>

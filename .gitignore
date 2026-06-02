@@ -1,0 +1,19 @@
+# 敏感配置（含真实 API Key / 路径）
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 调试日志
+debug_*.log
+
+# IDE / 工具
+.claude/
+.codewhale/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

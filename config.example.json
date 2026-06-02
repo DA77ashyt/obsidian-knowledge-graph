@@ -1,0 +1,8 @@
+{
+  "vault_path": "/path/to/your/Obsidian/Vault",
+  "deepseek_api_key": "sk-your-deepseek-api-key",
+  "deepseek_model": "deepseek-chat",
+  "deepseek_base_url": "https://api.deepseek.com/v1/chat/completions",
+  "server_host": "127.0.0.1",
+  "server_port": 8765
+}
